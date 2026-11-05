@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dynamic In-App AI Theme Overrides */
+[data-erp-theme="emerald"] .bg-indigo-600 { background-color: #059669; }
+[data-erp-theme="emerald"] .hover\:bg-indigo-700:hover { background-color: #047857; }
+[data-erp-theme="emerald"] .text-indigo-600 { color: #059669; }
+[data-erp-theme="emerald"] .text-indigo-700 { color: #047857; }
+[data-erp-theme="emerald"] .bg-indigo-50 { background-color: #ecfdf5; }
+[data-erp-theme="emerald"] .border-indigo-200 { border-color: #a7f3d0; }
+
+[data-erp-theme="royal-blue"] .bg-indigo-600 { background-color: #2563eb; }
+[data-erp-theme="royal-blue"] .hover\:bg-indigo-700:hover { background-color: #1d4ed8; }
+[data-erp-theme="royal-blue"] .text-indigo-600 { color: #2563eb; }
+[data-erp-theme="royal-blue"] .text-indigo-700 { color: #1d4ed8; }
+[data-erp-theme="royal-blue"] .bg-indigo-50 { background-color: #eff6ff; }
+[data-erp-theme="royal-blue"] .border-indigo-200 { border-color: #bfdbfe; }
+
+[data-erp-theme="crimson"] .bg-indigo-600 { background-color: #e11d48; }
+[data-erp-theme="crimson"] .hover\:bg-indigo-700:hover { background-color: #be123c; }
+[data-erp-theme="crimson"] .text-indigo-600 { color: #e11d48; }
+[data-erp-theme="crimson"] .text-indigo-700 { color: #be123c; }
+[data-erp-theme="crimson"] .bg-indigo-50 { background-color: #fff1f2; }
+[data-erp-theme="crimson"] .border-indigo-200 { border-color: #fecdd3; }
+
+[data-erp-theme="amber"] .bg-indigo-600 { background-color: #d97706; }
+[data-erp-theme="amber"] .hover\:bg-indigo-700:hover { background-color: #b45309; }
+[data-erp-theme="amber"] .text-indigo-600 { color: #d97706; }
+[data-erp-theme="amber"] .text-indigo-700 { color: #b45309; }
+[data-erp-theme="amber"] .bg-indigo-50 { background-color: #fffbeb; }
+[data-erp-theme="amber"] .border-indigo-200 { border-color: #fde68a; }
+
+[data-erp-theme="slate"] .bg-indigo-600 { background-color: #1e293b; }
+[data-erp-theme="slate"] .hover\:bg-indigo-700:hover { background-color: #0f172a; }
+[data-erp-theme="slate"] .text-indigo-600 { color: #334155; }
+[data-erp-theme="slate"] .text-indigo-700 { color: #0f172a; }
+[data-erp-theme="slate"] .bg-indigo-50 { background-color: #f1f5f9; }
+[data-erp-theme="slate"] .border-indigo-200 { border-color: #cbd5e1; }
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  #rb-print-overlay {
+    position: static !important;
+    inset: auto !important;
+    background: transparent !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  #rb-printable-document {
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+  }
+}

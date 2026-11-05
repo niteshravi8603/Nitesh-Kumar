@@ -1,0 +1,1542 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // =========================================================================
+    // GLOBAL DEFAULT-DENY SAFETY NET (MUST BE FIRST RULE BLOCK)
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // PRIMITIVE, TENANT ISOLATION & RBAC IDENTITY HELPERS
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.size() >= 3
+        && request.auth.token.email.size() <= 254
+        && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string
+        && id.size() >= 1
+        && id.size() <= 128
+        && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSchoolRole(r) {
+      return r is string
+        && r.size() <= 24
+        && r in ['main_admin', 'accountant', 'teacher', 'director'];
+    }
+
+    function schoolExists(schoolId) {
+      return exists(/databases/$(database)/documents/schools/$(schoolId));
+    }
+
+    function isActiveSchoolMember(schoolId) {
+      return isVerifiedUser()
+        && schoolExists(schoolId)
+        && exists(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid));
+    }
+
+    function getMemberRole(schoolId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function isSchoolMainAdmin(schoolId) {
+      return isActiveSchoolMember(schoolId)
+        && getMemberRole(schoolId) == 'main_admin';
+    }
+
+    function isAccountantOrAdmin(schoolId) {
+      return isActiveSchoolMember(schoolId)
+        && getMemberRole(schoolId) in ['main_admin', 'accountant'];
+    }
+
+    function isTeacherOrAdmin(schoolId) {
+      return isActiveSchoolMember(schoolId)
+        && getMemberRole(schoolId) in ['main_admin', 'teacher'];
+    }
+
+    function isValidAuthorizedEmails(emails) {
+      return emails is list
+        && emails.size() >= 1
+        && emails.size() <= 100
+        && emails[0] is string
+        && emails[0].size() >= 3
+        && emails[0].size() <= 254;
+    }
+
+    function hasValidAuditOnCreate(data) {
+      return data.createdByUid is string
+        && data.createdByUid.size() >= 1
+        && data.createdByUid.size() <= 128
+        && data.createdByUid == request.auth.uid
+        && data.updatedByUid is string
+        && data.updatedByUid.size() >= 1
+        && data.updatedByUid.size() <= 128
+        && data.updatedByUid == request.auth.uid
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function hasValidAuditTypes(data) {
+      return data.createdByUid is string
+        && data.createdByUid.size() >= 1
+        && data.createdByUid.size() <= 128
+        && data.updatedByUid is string
+        && data.updatedByUid.size() >= 1
+        && data.updatedByUid.size() <= 128
+        && data.updatedByUid == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function preservesImmutableAudit() {
+      return resource != null
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdByUid == existing().createdByUid;
+    }
+
+    function isFeeMonth(m) {
+      return m is string
+        && m.size() <= 16
+        && m in [
+          'April', 'May', 'June', 'July', 'August', 'September',
+          'October', 'November', 'December', 'January', 'February', 'March'
+        ];
+    }
+
+    function studentExistsOrBatch(schoolId, studentId) {
+      return exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(studentId))
+        || existsAfter(/databases/$(database)/documents/schools/$(schoolId)/students/$(studentId));
+    }
+
+    function examExistsOrBatch(schoolId, examId) {
+      return exists(/databases/$(database)/documents/schools/$(schoolId)/exams/$(examId))
+        || existsAfter(/databases/$(database)/documents/schools/$(schoolId)/exams/$(examId));
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP, SYNCED WITH BLUEPRINT)
+    // =========================================================================
+
+    function isValidUserMembership(data, membershipId) {
+      let keys = [
+        'id', 'uid', 'email', 'displayName', 'schoolId', 'schoolName',
+        'role', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == membershipId
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() <= 120
+        && isValidId(data.schoolId)
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && isSchoolRole(data.role)
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidSchoolTenant(data, schoolId) {
+      let keys = [
+        'id', 'schoolName', 'tagline', 'logoUrl', 'address', 'phone', 'alternatePhone',
+        'email', 'website', 'directorName', 'principalName', 'affiliationNo',
+        'ownerUid', 'ownerEmail', 'subscriptionPlan', 'subscriptionStatus', 'accountantCount',
+        'activeSession', 'billingCutoffMonth', 'studentSeq', 'receiptSeq',
+        'staffSeq', 'examSeq', 'customDesignations', 'authorizedEmails',
+        'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == schoolId
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && data.tagline is string && data.tagline.size() <= 180
+        && data.logoUrl is string && data.logoUrl.size() <= 2048
+        && data.address is string && data.address.size() <= 300
+        && data.phone is string && data.phone.size() <= 32
+        && data.alternatePhone is string && data.alternatePhone.size() <= 32
+        && data.email is string && data.email.size() <= 254
+        && data.website is string && data.website.size() <= 200
+        && data.directorName is string && data.directorName.size() <= 120
+        && data.principalName is string && data.principalName.size() <= 120
+        && data.affiliationNo is string && data.affiliationNo.size() <= 80
+        && isValidId(data.ownerUid)
+        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 254
+        && data.subscriptionPlan is string && data.subscriptionPlan.size() <= 24
+        && data.subscriptionPlan in ['Starter', 'Standard', 'Enterprise']
+        && data.subscriptionStatus is string && data.subscriptionStatus.size() <= 24
+        && data.subscriptionStatus in ['Active', 'Trial', 'Suspended']
+        && data.accountantCount is number && data.accountantCount >= 0 && data.accountantCount <= 2
+        && data.activeSession is string && data.activeSession.size() >= 1 && data.activeSession.size() <= 32
+        && isFeeMonth(data.billingCutoffMonth)
+        && data.studentSeq is number && data.studentSeq >= 1 && data.studentSeq <= 9999999
+        && data.receiptSeq is number && data.receiptSeq >= 1 && data.receiptSeq <= 99999999
+        && data.staffSeq is number && data.staffSeq >= 1 && data.staffSeq <= 9999999
+        && data.examSeq is number && data.examSeq >= 1 && data.examSeq <= 9999999
+        && data.customDesignations is list
+        && data.customDesignations.size() <= 50
+        && (data.customDesignations.size() == 0 || (data.customDesignations[0] is string && data.customDesignations[0].size() <= 80))
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && data.ownerEmail in data.authorizedEmails
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidSchoolMember(data, schoolId, memberUid) {
+      let keys = [
+        'uid', 'schoolId', 'ownerUid', 'email', 'displayName',
+        'role', 'inviteId', 'addedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.uid is string && data.uid.size() <= 128 && data.uid == memberUid
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && isValidId(data.ownerUid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() <= 120
+        && isSchoolRole(data.role)
+        && isValidId(data.inviteId)
+        && isValidId(data.addedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidStaffInvite(data, schoolId, inviteId) {
+      let keys = [
+        'id', 'schoolId', 'schoolName', 'invitedName', 'invitedEmail', 'role',
+        'status', 'invitedByUid', 'invitedByEmail', 'acceptedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == inviteId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && data.invitedName is string && data.invitedName.size() <= 120
+        && data.invitedEmail is string && data.invitedEmail.size() >= 3 && data.invitedEmail.size() <= 254
+        && data.role is string && data.role.size() <= 24
+        && data.role in ['accountant', 'teacher', 'director']
+        && data.status is string && data.status.size() <= 16
+        && data.status in ['pending', 'accepted', 'revoked']
+        && isValidId(data.invitedByUid)
+        && data.invitedByEmail is string && data.invitedByEmail.size() >= 3 && data.invitedByEmail.size() <= 254
+        && data.acceptedByUid is string && data.acceptedByUid.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidAcademicSession(data, schoolId, sessionId) {
+      let keys = [
+        'id', 'schoolId', 'name', 'startMonth', 'endMonth', 'isActive', 'sessionCreatedAt',
+        'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == sessionId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 32
+        && isFeeMonth(data.startMonth)
+        && isFeeMonth(data.endMonth)
+        && data.isActive is bool
+        && data.sessionCreatedAt is string && data.sessionCreatedAt.size() <= 64
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidFeeSchedule(data, schoolId, scheduleId) {
+      let keys = [
+        'id', 'schoolId', 'className', 'academicSession', 'admissionFee', 'monthlyTuitionFee',
+        'annualExamFee', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == scheduleId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.className is string && data.className.size() >= 1 && data.className.size() <= 40
+        && data.academicSession is string && data.academicSession.size() >= 1 && data.academicSession.size() <= 32
+        && data.admissionFee is number && data.admissionFee >= 0 && data.admissionFee <= 10000000
+        && data.monthlyTuitionFee is number && data.monthlyTuitionFee >= 0 && data.monthlyTuitionFee <= 10000000
+        && data.annualExamFee is number && data.annualExamFee >= 0 && data.annualExamFee <= 10000000
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidStudent(data, schoolId, studentId) {
+      let keys = [
+        'id', 'schoolId', 'admissionId', 'rollNumber', 'status', 'deactivatedAt', 'deactivatedReason',
+        'promotionHistory', 'academicSession', 'admissionType', 'admissionFee',
+        'previousSchool', 'lastGradePassed', 'tcDetails', 'name', 'dob', 'gender',
+        'casteCategory', 'className', 'section', 'monthlyTuitionFee', 'fatherName',
+        'motherName', 'phone', 'alternatePhone', 'address', 'photoUrl', 'aadhaarNumber',
+        'aadhaarDocUrl', 'transportEnabled', 'routeId', 'transportFee', 'customNotes',
+        'admissionDate', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == studentId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.admissionId is string && data.admissionId.size() >= 1 && data.admissionId.size() <= 32
+        && data.rollNumber is string && data.rollNumber.size() <= 32
+        && data.status is string && data.status.size() <= 16 && data.status in ['Active', 'Deactive']
+        && data.deactivatedAt is string && data.deactivatedAt.size() <= 64
+        && data.deactivatedReason is string && data.deactivatedReason.size() <= 240
+        && data.promotionHistory is list && data.promotionHistory.size() <= 25
+        && (data.promotionHistory.size() == 0 || data.promotionHistory[0] is map)
+        && data.academicSession is string && data.academicSession.size() >= 1 && data.academicSession.size() <= 32
+        && data.admissionType is string && data.admissionType.size() <= 16 && data.admissionType in ['Free', 'Paid']
+        && data.admissionFee is number && data.admissionFee >= 0 && data.admissionFee <= 10000000
+        && data.previousSchool is string && data.previousSchool.size() <= 160
+        && data.lastGradePassed is string && data.lastGradePassed.size() <= 64
+        && data.tcDetails is string && data.tcDetails.size() <= 160
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.dob is string && data.dob.size() <= 20
+        && data.gender is string && data.gender.size() <= 16 && data.gender in ['Male', 'Female', 'Other']
+        && data.casteCategory is string && data.casteCategory.size() <= 16 && data.casteCategory in ['General', 'OBC', 'SC', 'ST', 'Other']
+        && data.className is string && data.className.size() >= 1 && data.className.size() <= 40
+        && data.section is string && data.section.size() >= 1 && data.section.size() <= 16
+        && data.monthlyTuitionFee is number && data.monthlyTuitionFee >= 0 && data.monthlyTuitionFee <= 10000000
+        && data.fatherName is string && data.fatherName.size() <= 120
+        && data.motherName is string && data.motherName.size() <= 120
+        && data.phone is string && data.phone.size() <= 32
+        && data.alternatePhone is string && data.alternatePhone.size() <= 32
+        && data.address is string && data.address.size() <= 350
+        && data.photoUrl is string && data.photoUrl.size() <= 2048
+        && data.aadhaarNumber is string && data.aadhaarNumber.size() <= 32
+        && data.aadhaarDocUrl is string && data.aadhaarDocUrl.size() <= 2048
+        && data.transportEnabled is bool
+        && data.routeId is string && data.routeId.size() <= 128
+        && data.transportFee is number && data.transportFee >= 0 && data.transportFee <= 1000000
+        && data.customNotes is string && data.customNotes.size() <= 500
+        && data.admissionDate is string && data.admissionDate.size() <= 20
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidFeeReceipt(data, schoolId, feeId) {
+      let keys = [
+        'id', 'schoolId', 'receiptNo', 'studentId', 'admissionId', 'studentName', 'className',
+        'section', 'fatherName', 'category', 'feeMonth', 'paymentMode', 'amount',
+        'date', 'remarks', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == feeId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.receiptNo is string && data.receiptNo.size() >= 1 && data.receiptNo.size() <= 32
+        && isValidId(data.studentId)
+        && data.admissionId is string && data.admissionId.size() <= 32
+        && data.studentName is string && data.studentName.size() <= 120
+        && data.className is string && data.className.size() <= 40
+        && data.section is string && data.section.size() <= 16
+        && data.fatherName is string && data.fatherName.size() <= 120
+        && data.category is string && data.category.size() <= 24 && data.category in ['Tuition', 'Admission', 'Transport', 'Exam']
+        && isFeeMonth(data.feeMonth)
+        && data.paymentMode is string && data.paymentMode.size() <= 16 && data.paymentMode in ['Cash', 'UPI', 'Bank']
+        && data.amount is number && data.amount > 0 && data.amount <= 10000000
+        && data.date is string && data.date.size() <= 20
+        && data.remarks is string && data.remarks.size() <= 240
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidTransportRoute(data, schoolId, routeId) {
+      let keys = [
+        'id', 'schoolId', 'routeName', 'busNumber', 'pickupPoints', 'monthlyFare', 'driverName',
+        'driverPhone', 'routeCreatedAt', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == routeId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.routeName is string && data.routeName.size() >= 1 && data.routeName.size() <= 120
+        && data.busNumber is string && data.busNumber.size() <= 40
+        && data.pickupPoints is string && data.pickupPoints.size() <= 400
+        && data.monthlyFare is number && data.monthlyFare >= 0 && data.monthlyFare <= 1000000
+        && data.driverName is string && data.driverName.size() <= 120
+        && data.driverPhone is string && data.driverPhone.size() <= 32
+        && data.routeCreatedAt is string && data.routeCreatedAt.size() <= 64
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidStaffProfile(data, schoolId, docId) {
+      let keys = [
+        'id', 'schoolId', 'staffId', 'fullName', 'fatherOrSpouseName', 'designation',
+        'assignedDepartment', 'qualification', 'monthlySalary', 'address', 'phone',
+        'emergencyContact', 'joinedDate', 'photoUrl', 'authorizedEmails',
+        'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == docId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 32
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.fatherOrSpouseName is string && data.fatherOrSpouseName.size() <= 120
+        && data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 80
+        && data.assignedDepartment is string && data.assignedDepartment.size() <= 200
+        && data.qualification is string && data.qualification.size() <= 160
+        && data.monthlySalary is number && data.monthlySalary >= 0 && data.monthlySalary <= 10000000
+        && data.address is string && data.address.size() <= 350
+        && data.phone is string && data.phone.size() <= 32
+        && data.emergencyContact is string && data.emergencyContact.size() <= 32
+        && data.joinedDate is string && data.joinedDate.size() <= 20
+        && data.photoUrl is string && data.photoUrl.size() <= 2048
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidClassAllocation(data, schoolId, classId) {
+      let keys = [
+        'id', 'schoolId', 'className', 'sections', 'sectionCapacity', 'isDefault',
+        'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == classId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.className is string && data.className.size() >= 1 && data.className.size() <= 40
+        && data.sections is list && data.sections.size() >= 1 && data.sections.size() <= 20
+        && data.sections[0] is string && data.sections[0].size() >= 1 && data.sections[0].size() <= 16
+        && data.sectionCapacity is number && data.sectionCapacity >= 1 && data.sectionCapacity <= 500
+        && data.isDefault is bool
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidAttendanceSheet(data, schoolId) {
+      let keys = [
+        'key', 'schoolId', 'date', 'className', 'section', 'entries', 'notes', 'markedBy',
+        'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.key is string && data.key.size() >= 1 && data.key.size() <= 128
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.date is string && data.date.size() <= 20
+        && data.className is string && data.className.size() <= 40
+        && data.section is string && data.section.size() <= 16
+        && data.entries is map && data.entries.size() <= 300
+        && data.notes is map && data.notes.size() <= 300
+        && data.markedBy is string && data.markedBy.size() <= 254
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidExamSchedule(data, schoolId, examId) {
+      let keys = [
+        'id', 'schoolId', 'examCode', 'examName', 'academicSession', 'className', 'examCenter',
+        'instructions', 'subjects', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == examId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.examCode is string && data.examCode.size() >= 1 && data.examCode.size() <= 32
+        && data.examName is string && data.examName.size() >= 1 && data.examName.size() <= 120
+        && data.academicSession is string && data.academicSession.size() <= 32
+        && data.className is string && data.className.size() <= 40
+        && data.examCenter is string && data.examCenter.size() <= 180
+        && data.instructions is string && data.instructions.size() <= 2000
+        && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 25
+        && data.subjects[0] is map
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidExamMarksheet(data, schoolId, marksheetId) {
+      let keys = [
+        'id', 'schoolId', 'examId', 'examCode', 'examName', 'academicSession', 'studentId',
+        'admissionId', 'rollNumber', 'studentName', 'className', 'section',
+        'fatherName', 'motherName', 'dob', 'subjectMarks', 'totalMaxMarks',
+        'totalMinMarks', 'totalObtained', 'percentage', 'overallGrade', 'passed',
+        'remarks', 'customRemarks', 'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == marksheetId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && isValidId(data.examId)
+        && data.examCode is string && data.examCode.size() <= 32
+        && data.examName is string && data.examName.size() <= 120
+        && data.academicSession is string && data.academicSession.size() <= 32
+        && isValidId(data.studentId)
+        && data.admissionId is string && data.admissionId.size() <= 32
+        && data.rollNumber is string && data.rollNumber.size() <= 32
+        && data.studentName is string && data.studentName.size() <= 120
+        && data.className is string && data.className.size() <= 40
+        && data.section is string && data.section.size() <= 16
+        && data.fatherName is string && data.fatherName.size() <= 120
+        && data.motherName is string && data.motherName.size() <= 120
+        && data.dob is string && data.dob.size() <= 20
+        && data.subjectMarks is list && data.subjectMarks.size() >= 1 && data.subjectMarks.size() <= 25
+        && data.subjectMarks[0] is map
+        && data.totalMaxMarks is number && data.totalMaxMarks > 0 && data.totalMaxMarks <= 25000
+        && data.totalMinMarks is number && data.totalMinMarks >= 0 && data.totalMinMarks <= 25000
+        && data.totalObtained is number && data.totalObtained >= 0 && data.totalObtained <= data.totalMaxMarks
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && data.overallGrade is string && data.overallGrade.size() <= 16
+        && data.passed is bool
+        && data.remarks is string && data.remarks.size() <= 300
+        && data.customRemarks is string && data.customRemarks.size() <= 300
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidTermGrade(data, schoolId, gradeId) {
+      let keys = [
+        'id', 'schoolId', 'studentId', 'admissionId', 'studentName', 'className', 'section',
+        'fatherName', 'dob', 'term', 'english', 'hindi', 'maths', 'science',
+        'total', 'percentage', 'passed', 'recordedAt', 'authorizedEmails',
+        'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == gradeId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && isValidId(data.studentId)
+        && data.admissionId is string && data.admissionId.size() <= 32
+        && data.studentName is string && data.studentName.size() <= 120
+        && data.className is string && data.className.size() <= 40
+        && data.section is string && data.section.size() <= 16
+        && data.fatherName is string && data.fatherName.size() <= 120
+        && data.dob is string && data.dob.size() <= 20
+        && data.term is string && data.term.size() <= 40
+        && data.english is number && data.english >= 0 && data.english <= 100
+        && data.hindi is number && data.hindi >= 0 && data.hindi <= 100
+        && data.maths is number && data.maths >= 0 && data.maths <= 100
+        && data.science is number && data.science >= 0 && data.science <= 100
+        && data.total is number && data.total >= 0 && data.total <= 400
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && data.passed is bool
+        && data.recordedAt is string && data.recordedAt.size() <= 64
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidSchoolNotice(data, schoolId, noticeId) {
+      let keys = [
+        'id', 'schoolId', 'title', 'body', 'category', 'postedBy', 'noticeCreatedAt',
+        'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == noticeId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 2000
+        && data.category is string && data.category.size() <= 24
+        && data.category in ['Academic', 'Examination', 'Holiday', 'Transport', 'Admissions', 'General']
+        && data.postedBy is string && data.postedBy.size() <= 254
+        && data.noticeCreatedAt is string && data.noticeCreatedAt.size() <= 64
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidCloudMediaFile(data, schoolId, mediaId) {
+      let keys = [
+        'id', 'schoolId', 'category', 'recordRef', 'mimeType', 'dataUrl', 'sizeBytes',
+        'authorizedEmails', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == mediaId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.category is string && data.category.size() <= 32
+        && data.category in ['student-photo', 'student-aadhaar', 'staff-photo', 'school-logo']
+        && data.recordRef is string && data.recordRef.size() <= 128
+        && data.mimeType is string && data.mimeType.size() <= 64
+        && data.dataUrl is string && data.dataUrl.size() >= 20 && data.dataUrl.size() <= 450000
+        && data.sizeBytes is number && data.sizeBytes >= 0 && data.sizeBytes <= 500000
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    function isValidMasterAccount(data, userId) {
+      let keys = [
+        'uid', 'email', 'displayName', 'activeSchoolId', 'schoolName', 'role',
+        'cloudProvider', 'cloudApiUrl', 'cloudPublicKey', 'firebaseProjectId',
+        'firebaseAuthDomain', 'firebaseDatabaseId', 'firebaseAppId',
+        'firebaseStorageBucket', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == userId && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && (data.email == request.auth.token.email || data.email == request.auth.token.email.lower())
+        && data.displayName is string && data.displayName.size() <= 120
+        && isValidId(data.activeSchoolId)
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && isSchoolRole(data.role)
+        && data.cloudProvider is string && data.cloudProvider.size() <= 24
+        && data.cloudProvider in ['managed', 'supabase', 'firebase']
+        && data.cloudApiUrl is string && data.cloudApiUrl.size() <= 500
+        && data.cloudPublicKey is string && data.cloudPublicKey.size() <= 2000
+        && data.firebaseProjectId is string && data.firebaseProjectId.size() <= 128
+        && data.firebaseAuthDomain is string && data.firebaseAuthDomain.size() <= 254
+        && data.firebaseDatabaseId is string && data.firebaseDatabaseId.size() <= 128
+        && data.firebaseAppId is string && data.firebaseAppId.size() <= 160
+        && data.firebaseStorageBucket is string && data.firebaseStorageBucket.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUiCustomizationConfig(data, schoolId, configId) {
+      let keys = [
+        'id', 'schoolId', 'accentTheme', 'densityMode', 'feeReceiptShowQr',
+        'feeReceiptStyle', 'feeReceiptFooterNote', 'feeReceiptShowLogoWatermark',
+        'marksheetLayout', 'marksheetShowQr', 'marksheetShowRankBadge',
+        'admitCardShowQr', 'dashboardBannerTitle', 'customStudentFields',
+        'promptHistory', 'authorizedEmails', 'createdByUid', 'updatedByUid',
+        'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(keys)
+        && data.keys().hasOnly(keys)
+        && data.id is string && data.id.size() <= 128 && data.id == configId
+        && data.schoolId is string && data.schoolId.size() <= 128 && data.schoolId == schoolId
+        && data.accentTheme is string && data.accentTheme.size() <= 24
+        && data.accentTheme in ['indigo', 'emerald', 'royal-blue', 'crimson', 'amber', 'slate']
+        && data.densityMode is string && data.densityMode.size() <= 24
+        && data.densityMode in ['comfortable', 'compact']
+        && data.feeReceiptShowQr is bool
+        && data.feeReceiptStyle is string && data.feeReceiptStyle.size() <= 24
+        && data.feeReceiptStyle in ['classic', 'modern-boxed', 'compact-slip']
+        && data.feeReceiptFooterNote is string && data.feeReceiptFooterNote.size() <= 400
+        && data.feeReceiptShowLogoWatermark is bool
+        && data.marksheetLayout is string && data.marksheetLayout.size() <= 24
+        && data.marksheetLayout in ['standard', 'executive-crest', 'cbse-detailed']
+        && data.marksheetShowQr is bool
+        && data.marksheetShowRankBadge is bool
+        && data.admitCardShowQr is bool
+        && data.dashboardBannerTitle is string && data.dashboardBannerTitle.size() <= 160
+        && data.customStudentFields is list && data.customStudentFields.size() <= 12
+        && (data.customStudentFields.size() == 0 || (data.customStudentFields[0] is map && data.customStudentFields[0].keys().size() <= 8))
+        && data.promptHistory is list && data.promptHistory.size() <= 25
+        && (data.promptHistory.size() == 0 || (data.promptHistory[0] is string && data.promptHistory[0].size() <= 500))
+        && isValidAuthorizedEmails(data.authorizedEmails)
+        && hasValidAuditTypes(data);
+    }
+
+    // =========================================================================
+    // 0. MASTER ACCOUNT DIRECTORY (/master_accounts/{userId}) — Owner-Only PII
+    // =========================================================================
+    match /master_accounts/{userId} {
+      allow get: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidMasterAccount(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidMasterAccount(incoming(), userId)
+        && resource != null
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'email', 'displayName', 'activeSchoolId', 'schoolName', 'role',
+          'cloudProvider', 'cloudApiUrl', 'cloudPublicKey', 'firebaseProjectId',
+          'firebaseAuthDomain', 'firebaseDatabaseId', 'firebaseAppId',
+          'firebaseStorageBucket', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 1. USER WORKSPACE MEMBERSHIP DISCOVERY INDEX (/user_memberships/{membershipId})
+    // =========================================================================
+    match /user_memberships/{membershipId} {
+      allow get: if isVerifiedUser()
+        && isValidId(membershipId)
+        && (
+          resource == null
+          || existing().uid == request.auth.uid
+          || isSchoolMainAdmin(existing().schoolId)
+        );
+      allow list: if isVerifiedUser() && existing().uid == request.auth.uid;
+      allow create: if isVerifiedUser()
+        && isValidId(membershipId)
+        && isValidUserMembership(incoming(), membershipId)
+        && incoming().createdAt == request.time
+        && (incoming().uid == request.auth.uid || isSchoolMainAdmin(incoming().schoolId))
+        && existsAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/members/$(incoming().uid))
+        && getAfter(/databases/$(database)/documents/schools/$(incoming().schoolId)/members/$(incoming().uid)).data.role == incoming().role;
+      allow update: if isVerifiedUser()
+        && isValidId(membershipId)
+        && isValidUserMembership(incoming(), membershipId)
+        && resource != null
+        && incoming().createdAt == existing().createdAt
+        && incoming().id == existing().id
+        && incoming().uid == existing().uid
+        && incoming().schoolId == existing().schoolId
+        && (
+          (
+            isSchoolMainAdmin(existing().schoolId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'schoolName', 'role', 'updatedAt'
+            ])
+          )
+          ||
+          (
+            existing().uid == request.auth.uid
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'schoolName', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(membershipId)
+        && resource != null
+        && (isSchoolMainAdmin(existing().schoolId) || existing().uid == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 2. MULTI-TENANT SCHOOL WORKSPACE ROOT (/schools/{schoolId})
+    // =========================================================================
+    match /schools/{schoolId} {
+      allow get: if isVerifiedUser()
+        && isValidId(schoolId)
+        && (
+          resource == null
+          || isActiveSchoolMember(schoolId)
+          || existing().ownerUid == request.auth.uid
+        );
+      allow list: if isVerifiedUser()
+        && (
+          request.auth.token.email in existing().authorizedEmails
+          || request.auth.token.email.lower() in existing().authorizedEmails
+        );
+      allow create: if isVerifiedUser()
+        && isValidId(schoolId)
+        && isValidSchoolTenant(incoming(), schoolId)
+        && hasValidAuditOnCreate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().accountantCount == 0
+        && existsAfter(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data.role == 'main_admin';
+      allow update: if isVerifiedUser()
+        && isValidId(schoolId)
+        && isValidSchoolTenant(incoming(), schoolId)
+        && preservesImmutableAudit()
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().ownerEmail == existing().ownerEmail
+        && (
+          // Action 1: Main Admin full workspace update
+          (
+            isSchoolMainAdmin(schoolId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'schoolName', 'tagline', 'logoUrl', 'address', 'phone', 'alternatePhone',
+              'email', 'website', 'directorName', 'principalName', 'affiliationNo',
+              'subscriptionPlan', 'subscriptionStatus', 'accountantCount',
+              'activeSession', 'billingCutoffMonth', 'studentSeq', 'receiptSeq',
+              'staffSeq', 'examSeq', 'customDesignations', 'authorizedEmails',
+              'updatedByUid', 'updatedAt'
+            ])
+          )
+          ||
+          // Action 2: Accountant updating student/receipt sequence counters during admission or fee collection
+          (
+            isAccountantOrAdmin(schoolId)
+            && incoming().authorizedEmails == existing().authorizedEmails
+            && incoming().accountantCount == existing().accountantCount
+            && incoming().subscriptionPlan == existing().subscriptionPlan
+            && incoming().subscriptionStatus == existing().subscriptionStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentSeq', 'receiptSeq', 'billingCutoffMonth', 'updatedByUid', 'updatedAt'
+            ])
+          )
+          ||
+          // Action 3: Invited Accountant atomically claiming pending invite (increments accountantCount, bounded <= 2)
+          (
+            !exists(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid))
+            && getAfter(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data.role == 'accountant'
+            && incoming().accountantCount == existing().accountantCount + 1
+            && incoming().authorizedEmails == existing().authorizedEmails
+            && incoming().subscriptionPlan == existing().subscriptionPlan
+            && incoming().subscriptionStatus == existing().subscriptionStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'accountantCount', 'updatedByUid', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+
+      // =======================================================================
+      // 2A. SCHOOL RBAC MEMBERS (/schools/{schoolId}/members/{memberUid})
+      // =======================================================================
+      match /members/{memberUid} {
+        allow get: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(memberUid)
+          && (request.auth.uid == memberUid || isActiveSchoolMember(schoolId));
+        allow list: if isVerifiedUser()
+          && (existing().ownerUid == request.auth.uid || existing().uid == request.auth.uid);
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(memberUid)
+          && isValidSchoolMember(incoming(), schoolId, memberUid)
+          && incoming().createdAt == request.time
+          && (
+            // Branch A: School creator bootstrapping sole Main Admin seat
+            (
+              memberUid == request.auth.uid
+              && incoming().role == 'main_admin'
+              && incoming().inviteId == 'owner_bootstrap'
+              && incoming().ownerUid == request.auth.uid
+              && incoming().addedByUid == request.auth.uid
+              && !exists(/databases/$(database)/documents/schools/$(schoolId))
+              && existsAfter(/databases/$(database)/documents/schools/$(schoolId))
+              && getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid
+            )
+            ||
+            // Branch B: Invited staff member claiming a valid pending invite
+            (
+              memberUid == request.auth.uid
+              && incoming().role in ['accountant', 'teacher', 'director']
+              && incoming().inviteId != 'owner_bootstrap'
+              && exists(/databases/$(database)/documents/schools/$(schoolId))
+              && exists(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId))
+              && get(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.status == 'pending'
+              && (
+                get(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.invitedEmail == request.auth.token.email
+                || get(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.invitedEmail == request.auth.token.email.lower()
+              )
+              && get(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.role == incoming().role
+              && getAfter(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.status == 'accepted'
+              && (
+                incoming().role != 'accountant'
+                || getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount + 1
+              )
+            )
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(memberUid)
+          && isValidSchoolMember(incoming(), schoolId, memberUid)
+          && resource != null
+          && incoming().createdAt == existing().createdAt
+          && incoming().uid == existing().uid
+          && incoming().schoolId == existing().schoolId
+          && incoming().ownerUid == existing().ownerUid
+          && isSchoolMainAdmin(schoolId)
+          && (
+            (existing().role == 'main_admin' && incoming().role == 'main_admin')
+            || (existing().role != 'main_admin' && incoming().role in ['accountant', 'teacher', 'director'])
+          )
+          && (
+            (existing().role == incoming().role)
+            || (
+              existing().role != 'accountant'
+              && incoming().role == 'accountant'
+              && getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount + 1
+            )
+            || (
+              existing().role == 'accountant'
+              && incoming().role != 'accountant'
+              && getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount - 1
+            )
+            || (
+              existing().role != 'accountant'
+              && incoming().role != 'accountant'
+            )
+          )
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName', 'role', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(memberUid)
+          && resource != null
+          && existing().role != 'main_admin'
+          && isSchoolMainAdmin(schoolId)
+          && (
+            existing().role != 'accountant'
+            || getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount - 1
+          );
+      }
+
+      // =======================================================================
+      // 2B. STAFF INVITATION LINKS (/schools/{schoolId}/invites/{inviteId})
+      // =======================================================================
+      match /invites/{inviteId} {
+        allow get: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(inviteId)
+          && (
+            isSchoolMainAdmin(schoolId)
+            || (
+              resource != null
+              && (
+                request.auth.token.email == existing().invitedEmail
+                || request.auth.token.email.lower() == existing().invitedEmail
+              )
+            )
+          );
+        allow list: if isVerifiedUser()
+          && existing().invitedByUid == request.auth.uid;
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(inviteId)
+          && isValidStaffInvite(incoming(), schoolId, inviteId)
+          && incoming().createdAt == request.time
+          && incoming().invitedByUid == request.auth.uid
+          && incoming().status == 'pending'
+          && incoming().acceptedByUid == ''
+          && isSchoolMainAdmin(schoolId)
+          && (
+            incoming().role != 'accountant'
+            || get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount < 2
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(inviteId)
+          && isValidStaffInvite(incoming(), schoolId, inviteId)
+          && resource != null
+          && incoming().createdAt == existing().createdAt
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && incoming().invitedEmail == existing().invitedEmail
+          && incoming().invitedByUid == existing().invitedByUid
+          && (
+            // Action 1: Invited staff claiming a pending invite (Terminal State Lock: pending -> accepted)
+            (
+              existing().status == 'pending'
+              && incoming().status == 'accepted'
+              && incoming().role == existing().role
+              && incoming().acceptedByUid == request.auth.uid
+              && (
+                request.auth.token.email == existing().invitedEmail
+                || request.auth.token.email.lower() == existing().invitedEmail
+              )
+              && existsAfter(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid))
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'acceptedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            // Action 2: Main Admin revoking a pending invite (Terminal State Lock: pending -> revoked)
+            (
+              existing().status == 'pending'
+              && incoming().status == 'revoked'
+              && isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(inviteId)
+          && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 3. ACADEMIC SESSIONS — Main Admin Write; All Members Read
+      // =======================================================================
+      match /sessions/{sessionId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(sessionId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(sessionId)
+          && isValidAcademicSession(incoming(), schoolId, sessionId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(sessionId)
+          && isValidAcademicSession(incoming(), schoolId, sessionId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'startMonth', 'endMonth', 'isActive', 'sessionCreatedAt',
+            'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(sessionId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 4. FEE SCHEDULES — Main Admin + Accountant Write; All Members Read
+      // =======================================================================
+      match /fee_schedules/{scheduleId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(scheduleId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(scheduleId)
+          && isValidFeeSchedule(incoming(), schoolId, scheduleId)
+          && hasValidAuditOnCreate(incoming())
+          && isAccountantOrAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(scheduleId)
+          && isValidFeeSchedule(incoming(), schoolId, scheduleId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'className', 'academicSession', 'admissionFee', 'monthlyTuitionFee',
+                'annualExamFee', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              isAccountantOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'className', 'academicSession', 'admissionFee', 'monthlyTuitionFee',
+                'annualExamFee', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(scheduleId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 5. ADMITTED STUDENTS — Main Admin + Accountant Write; PII & Terminal Locked
+      // =======================================================================
+      match /students/{studentId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(studentId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(studentId)
+          && isValidStudent(incoming(), schoolId, studentId)
+          && hasValidAuditOnCreate(incoming())
+          && isAccountantOrAdmin(schoolId)
+          && (
+            incoming().routeId == ''
+            || isSchoolMainAdmin(schoolId)
+            || exists(/databases/$(database)/documents/schools/$(schoolId)/routes/$(incoming().routeId))
+            || existsAfter(/databases/$(database)/documents/schools/$(schoolId)/routes/$(incoming().routeId))
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(studentId)
+          && isValidStudent(incoming(), schoolId, studentId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'admissionId', 'rollNumber', 'status', 'deactivatedAt', 'deactivatedReason', 'promotionHistory',
+                'academicSession', 'admissionType', 'admissionFee', 'previousSchool',
+                'lastGradePassed', 'tcDetails', 'name', 'dob', 'gender', 'casteCategory',
+                'className', 'section', 'monthlyTuitionFee', 'fatherName', 'motherName',
+                'phone', 'alternatePhone', 'address', 'photoUrl', 'aadhaarNumber',
+                'aadhaarDocUrl', 'transportEnabled', 'routeId', 'transportFee',
+                'customNotes', 'admissionDate', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              // Terminal State Lock: Accountants cannot modify deactivated ('Deactive') student records
+              existing().status == 'Active'
+              && isAccountantOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'rollNumber', 'status', 'deactivatedAt', 'deactivatedReason', 'promotionHistory',
+                'academicSession', 'admissionType', 'admissionFee', 'previousSchool',
+                'lastGradePassed', 'tcDetails', 'name', 'dob', 'gender', 'casteCategory',
+                'className', 'section', 'monthlyTuitionFee', 'fatherName', 'motherName',
+                'phone', 'alternatePhone', 'address', 'photoUrl', 'aadhaarNumber',
+                'aadhaarDocUrl', 'transportEnabled', 'routeId', 'transportFee',
+                'customNotes', 'admissionDate', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              // Action 3: Teacher attaching missing student photo for Admit Card / Marksheet
+              existing().status == 'Active'
+              && isTeacherOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'photoUrl', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(studentId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 6. FEE RECEIPTS LEDGER — Main Admin + Accountant Write
+      // =======================================================================
+      match /fees/{feeId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(feeId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(feeId)
+          && isValidFeeReceipt(incoming(), schoolId, feeId)
+          && hasValidAuditOnCreate(incoming())
+          && isAccountantOrAdmin(schoolId)
+          && (isSchoolMainAdmin(schoolId) || studentExistsOrBatch(schoolId, incoming().studentId));
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(feeId)
+          && isValidFeeReceipt(incoming(), schoolId, feeId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'receiptNo', 'admissionId', 'studentName', 'className', 'section', 'fatherName',
+                'category', 'feeMonth', 'paymentMode', 'amount', 'date', 'remarks',
+                'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              isAccountantOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().amount == existing().amount
+              && incoming().receiptNo == existing().receiptNo
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'studentName', 'fatherName', 'remarks', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(feeId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 7. TRANSPORT ROUTES — Main Admin Write; All Members Read
+      // =======================================================================
+      match /routes/{routeId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(routeId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(routeId)
+          && isValidTransportRoute(incoming(), schoolId, routeId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(routeId)
+          && isValidTransportRoute(incoming(), schoolId, routeId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'routeName', 'busNumber', 'pickupPoints', 'monthlyFare',
+            'driverName', 'driverPhone', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(routeId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 8. STAFF HR PROFILES — Main Admin Write; PII Isolated
+      // =======================================================================
+      match /staff/{staffId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(staffId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(staffId)
+          && isValidStaffProfile(incoming(), schoolId, staffId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(staffId)
+          && isValidStaffProfile(incoming(), schoolId, staffId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'staffId', 'fullName', 'fatherOrSpouseName', 'designation',
+            'assignedDepartment', 'qualification', 'monthlySalary', 'address',
+            'phone', 'emergencyContact', 'joinedDate', 'photoUrl',
+            'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(staffId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 9. CLASS & SECTION ALLOCATIONS — Main Admin Write; All Members Read
+      // =======================================================================
+      match /classes/{classId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(classId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(classId)
+          && isValidClassAllocation(incoming(), schoolId, classId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(classId)
+          && isValidClassAllocation(incoming(), schoolId, classId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'className', 'sections', 'sectionCapacity', 'isDefault',
+            'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(classId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 10. DAILY ATTENDANCE REGISTERS — Main Admin + Teacher Write
+      // =======================================================================
+      match /attendance/{sheetId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(sheetId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(sheetId)
+          && isValidAttendanceSheet(incoming(), schoolId)
+          && hasValidAuditOnCreate(incoming())
+          && isTeacherOrAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(sheetId)
+          && isValidAttendanceSheet(incoming(), schoolId)
+          && preservesImmutableAudit()
+          && incoming().key == existing().key
+          && incoming().schoolId == existing().schoolId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'entries', 'notes', 'markedBy', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              isTeacherOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'entries', 'notes', 'markedBy', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(sheetId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 11. EXAM SCHEDULES & TIMETABLES — Main Admin Write; All Members Read
+      // =======================================================================
+      match /exams/{examId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(examId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(examId)
+          && isValidExamSchedule(incoming(), schoolId, examId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(examId)
+          && isValidExamSchedule(incoming(), schoolId, examId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'examName', 'academicSession', 'className', 'examCenter',
+            'instructions', 'subjects', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(examId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 12. STUDENT EXAM MARKSHEETS — Main Admin + Teacher Write
+      // =======================================================================
+      match /marksheets/{marksheetId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(marksheetId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(marksheetId)
+          && isValidExamMarksheet(incoming(), schoolId, marksheetId)
+          && hasValidAuditOnCreate(incoming())
+          && isTeacherOrAdmin(schoolId)
+          && (
+            isSchoolMainAdmin(schoolId)
+            || (examExistsOrBatch(schoolId, incoming().examId) && studentExistsOrBatch(schoolId, incoming().studentId))
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(marksheetId)
+          && isValidExamMarksheet(incoming(), schoolId, marksheetId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && incoming().examId == existing().examId
+          && incoming().studentId == existing().studentId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'examCode', 'examName', 'academicSession', 'admissionId', 'rollNumber',
+                'studentName', 'className', 'section', 'fatherName', 'motherName',
+                'dob', 'subjectMarks', 'totalMaxMarks', 'totalMinMarks', 'totalObtained',
+                'percentage', 'overallGrade', 'passed', 'remarks', 'customRemarks',
+                'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              isTeacherOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'examCode', 'examName', 'academicSession', 'admissionId', 'rollNumber',
+                'studentName', 'className', 'section', 'fatherName', 'motherName',
+                'dob', 'subjectMarks', 'totalMaxMarks', 'totalMinMarks', 'totalObtained',
+                'percentage', 'overallGrade', 'passed', 'remarks', 'customRemarks',
+                'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(marksheetId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 13. TERM GRADE RECORDS — Main Admin + Teacher Write
+      // =======================================================================
+      match /grades/{gradeId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(gradeId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(gradeId)
+          && isValidTermGrade(incoming(), schoolId, gradeId)
+          && hasValidAuditOnCreate(incoming())
+          && isTeacherOrAdmin(schoolId)
+          && (isSchoolMainAdmin(schoolId) || studentExistsOrBatch(schoolId, incoming().studentId));
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(gradeId)
+          && isValidTermGrade(incoming(), schoolId, gradeId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && incoming().studentId == existing().studentId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'admissionId', 'studentName', 'className', 'section', 'fatherName',
+                'dob', 'term', 'english', 'hindi', 'maths', 'science', 'total',
+                'percentage', 'passed', 'recordedAt', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              isTeacherOrAdmin(schoolId)
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'admissionId', 'studentName', 'className', 'section', 'fatherName',
+                'dob', 'term', 'english', 'hindi', 'maths', 'science', 'total',
+                'percentage', 'passed', 'recordedAt', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(gradeId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 14. NOTICE BOARD ANNOUNCEMENTS — Main Admin Write; All Members Read
+      // =======================================================================
+      match /notices/{noticeId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(noticeId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(noticeId)
+          && isValidSchoolNotice(incoming(), schoolId, noticeId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(noticeId)
+          && isValidSchoolNotice(incoming(), schoolId, noticeId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'body', 'category', 'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(noticeId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 15. SECURED CLOUD MEDIA OBJECTS — Main Admin + Accountant Write
+      // =======================================================================
+      match /media_files/{mediaId} {
+        allow get: if isVerifiedUser() && isValidId(schoolId) && isValidId(mediaId) && isActiveSchoolMember(schoolId);
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(mediaId)
+          && isValidCloudMediaFile(incoming(), schoolId, mediaId)
+          && hasValidAuditOnCreate(incoming())
+          && (
+            isAccountantOrAdmin(schoolId)
+            || (isTeacherOrAdmin(schoolId) && incoming().category == 'student-photo')
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(mediaId)
+          && isValidCloudMediaFile(incoming(), schoolId, mediaId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && (
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'recordRef', 'mimeType', 'dataUrl', 'sizeBytes',
+                'authorizedEmails', 'updatedByUid', 'updatedAt'
+              ])
+            )
+            ||
+            (
+              (
+                isAccountantOrAdmin(schoolId)
+                || (isTeacherOrAdmin(schoolId) && existing().category == 'student-photo' && incoming().category == 'student-photo')
+              )
+              && incoming().authorizedEmails == existing().authorizedEmails
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'recordRef', 'mimeType', 'dataUrl', 'sizeBytes', 'updatedByUid', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(mediaId) && isSchoolMainAdmin(schoolId);
+      }
+
+      // =======================================================================
+      // 16. IN-APP AI CUSTOMIZATION ENGINE CONFIG — Main Admin Write; Members Read
+      // =======================================================================
+      match /ui_config/{configId} {
+        allow get: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(configId)
+          && (resource == null || isActiveSchoolMember(schoolId));
+        allow list: if isVerifiedUser()
+          && (
+            request.auth.token.email in existing().authorizedEmails
+            || request.auth.token.email.lower() in existing().authorizedEmails
+          );
+        allow create: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(configId)
+          && isValidUiCustomizationConfig(incoming(), schoolId, configId)
+          && hasValidAuditOnCreate(incoming())
+          && isSchoolMainAdmin(schoolId);
+        allow update: if isVerifiedUser()
+          && isValidId(schoolId)
+          && isValidId(configId)
+          && isValidUiCustomizationConfig(incoming(), schoolId, configId)
+          && preservesImmutableAudit()
+          && incoming().id == existing().id
+          && incoming().schoolId == existing().schoolId
+          && isSchoolMainAdmin(schoolId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'accentTheme', 'densityMode', 'feeReceiptShowQr', 'feeReceiptStyle',
+            'feeReceiptFooterNote', 'feeReceiptShowLogoWatermark', 'marksheetLayout',
+            'marksheetShowQr', 'marksheetShowRankBadge', 'admitCardShowQr',
+            'dashboardBannerTitle', 'customStudentFields', 'promptHistory',
+            'authorizedEmails', 'updatedByUid', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(schoolId) && isValidId(configId) && isSchoolMainAdmin(schoolId);
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "RB Public School MANAGMEST SYSTEM",
+  "description": "CREATD BY NITSEH KUMAR",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

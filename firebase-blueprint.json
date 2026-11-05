@@ -1,0 +1,597 @@
+{
+  "entities": {
+    "UserMembership": {
+      "title": "UserMembership",
+      "description": "Cross-school membership index allowing an authenticated user to discover their assigned school workspaces and roles.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["main_admin", "accountant", "teacher", "director"], "maxLength": 24 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "email", "displayName", "schoolId", "schoolName", "role", "createdAt", "updatedAt"]
+    },
+    "SchoolTenant": {
+      "title": "SchoolTenant",
+      "description": "Multi-tenant school workspace root document storing branding, subscription status, sequence counters, accountant quota counter, and authorized roster.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "tagline": { "type": "string", "maxLength": 180 },
+        "logoUrl": { "type": "string", "maxLength": 2048 },
+        "address": { "type": "string", "maxLength": 300 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "alternatePhone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 254 },
+        "website": { "type": "string", "maxLength": 200 },
+        "directorName": { "type": "string", "maxLength": 120 },
+        "principalName": { "type": "string", "maxLength": 120 },
+        "affiliationNo": { "type": "string", "maxLength": 80 },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "subscriptionPlan": { "type": "string", "enum": ["Starter", "Standard", "Enterprise"], "maxLength": 24 },
+        "subscriptionStatus": { "type": "string", "enum": ["Active", "Trial", "Suspended"], "maxLength": 24 },
+        "accountantCount": { "type": "number", "description": "Active accountant seats in this school (strictly bounded 0..2)." },
+        "activeSession": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "billingCutoffMonth": {
+          "type": "string",
+          "enum": ["April", "May", "June", "July", "August", "September", "October", "November", "December", "January", "February", "March"],
+          "maxLength": 16
+        },
+        "studentSeq": { "type": "number" },
+        "receiptSeq": { "type": "number" },
+        "staffSeq": { "type": "number" },
+        "examSeq": { "type": "number" },
+        "customDesignations": { "type": "array", "description": "Bounded list of custom staff designations (max 50)." },
+        "authorizedEmails": { "type": "array", "description": "Bounded list of verified emails authorized to query this school workspace (max 100)." },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolName", "tagline", "logoUrl", "address", "phone", "alternatePhone",
+        "email", "website", "directorName", "principalName", "affiliationNo",
+        "ownerUid", "ownerEmail", "subscriptionPlan", "subscriptionStatus", "accountantCount",
+        "activeSession", "billingCutoffMonth", "studentSeq", "receiptSeq", "staffSeq", "examSeq",
+        "customDesignations", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "SchoolMember": {
+      "title": "SchoolMember",
+      "description": "Authoritative RBAC membership record inside a school workspace keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["main_admin", "accountant", "teacher", "director"], "maxLength": 24 },
+        "inviteId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "addedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "schoolId", "ownerUid", "email", "displayName", "role", "inviteId", "addedByUid", "createdAt", "updatedAt"]
+    },
+    "StaffInvite": {
+      "title": "StaffInvite",
+      "description": "Role-bound staff invitation token generated by a school Main Admin for link-based Chrome onboarding.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "invitedName": { "type": "string", "maxLength": 120 },
+        "invitedEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "role": { "type": "string", "enum": ["accountant", "teacher", "director"], "maxLength": 24 },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"], "maxLength": 16 },
+        "invitedByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invitedByEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "acceptedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "schoolName", "invitedName", "invitedEmail", "role",
+        "status", "invitedByUid", "invitedByEmail", "acceptedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "AcademicSession": {
+      "title": "AcademicSession",
+      "description": "Tenant-isolated academic session configuration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "startMonth": { "type": "string", "maxLength": 16 },
+        "endMonth": { "type": "string", "maxLength": 16 },
+        "isActive": { "type": "boolean" },
+        "sessionCreatedAt": { "type": "string", "maxLength": 64 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "name", "startMonth", "endMonth", "isActive", "sessionCreatedAt", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "FeeSchedule": {
+      "title": "FeeSchedule",
+      "description": "Tenant-isolated class and session fee master rate card.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "academicSession": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "admissionFee": { "type": "number" },
+        "monthlyTuitionFee": { "type": "number" },
+        "annualExamFee": { "type": "number" },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "className", "academicSession", "admissionFee", "monthlyTuitionFee", "annualExamFee", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Tenant-isolated admitted student record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "admissionId": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "rollNumber": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Active", "Deactive"], "maxLength": 16 },
+        "deactivatedAt": { "type": "string", "maxLength": 64 },
+        "deactivatedReason": { "type": "string", "maxLength": 240 },
+        "promotionHistory": { "type": "array" },
+        "academicSession": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "admissionType": { "type": "string", "enum": ["Free", "Paid"], "maxLength": 16 },
+        "admissionFee": { "type": "number" },
+        "previousSchool": { "type": "string", "maxLength": 160 },
+        "lastGradePassed": { "type": "string", "maxLength": 64 },
+        "tcDetails": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "dob": { "type": "string", "maxLength": 20 },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"], "maxLength": 16 },
+        "casteCategory": { "type": "string", "enum": ["General", "OBC", "SC", "ST", "Other"], "maxLength": 16 },
+        "className": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "section": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "monthlyTuitionFee": { "type": "number" },
+        "fatherName": { "type": "string", "maxLength": 120 },
+        "motherName": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "alternatePhone": { "type": "string", "maxLength": 32 },
+        "address": { "type": "string", "maxLength": 350 },
+        "photoUrl": { "type": "string", "maxLength": 2048 },
+        "aadhaarNumber": { "type": "string", "maxLength": 32 },
+        "aadhaarDocUrl": { "type": "string", "maxLength": 2048 },
+        "transportEnabled": { "type": "boolean" },
+        "routeId": { "type": "string", "maxLength": 128 },
+        "transportFee": { "type": "number" },
+        "customNotes": { "type": "string", "maxLength": 500 },
+        "admissionDate": { "type": "string", "maxLength": 20 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "admissionId", "rollNumber", "status", "deactivatedAt", "deactivatedReason", "promotionHistory",
+        "academicSession", "admissionType", "admissionFee", "previousSchool", "lastGradePassed", "tcDetails",
+        "name", "dob", "gender", "casteCategory", "className", "section", "monthlyTuitionFee",
+        "fatherName", "motherName", "phone", "alternatePhone", "address", "photoUrl", "aadhaarNumber", "aadhaarDocUrl",
+        "transportEnabled", "routeId", "transportFee", "customNotes", "admissionDate",
+        "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "FeeReceipt": {
+      "title": "FeeReceipt",
+      "description": "Tenant-isolated fee collection ledger receipt.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "receiptNo": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "admissionId": { "type": "string", "maxLength": 32 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "className": { "type": "string", "maxLength": 40 },
+        "section": { "type": "string", "maxLength": 16 },
+        "fatherName": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "enum": ["Tuition", "Admission", "Transport", "Exam"], "maxLength": 24 },
+        "feeMonth": { "type": "string", "maxLength": 16 },
+        "paymentMode": { "type": "string", "enum": ["Cash", "UPI", "Bank"], "maxLength": 16 },
+        "amount": { "type": "number" },
+        "date": { "type": "string", "maxLength": 20 },
+        "remarks": { "type": "string", "maxLength": 240 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "receiptNo", "studentId", "admissionId", "studentName", "className", "section", "fatherName",
+        "category", "feeMonth", "paymentMode", "amount", "date", "remarks",
+        "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "TransportRoute": {
+      "title": "TransportRoute",
+      "description": "Tenant-isolated school bus route configuration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "routeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "busNumber": { "type": "string", "maxLength": 40 },
+        "pickupPoints": { "type": "string", "maxLength": 400 },
+        "monthlyFare": { "type": "number" },
+        "driverName": { "type": "string", "maxLength": 120 },
+        "driverPhone": { "type": "string", "maxLength": 32 },
+        "routeCreatedAt": { "type": "string", "maxLength": 64 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "routeName", "busNumber", "pickupPoints", "monthlyFare", "driverName", "driverPhone", "routeCreatedAt", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "StaffProfile": {
+      "title": "StaffProfile",
+      "description": "Tenant-isolated faculty and staff HR profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffId": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "fatherOrSpouseName": { "type": "string", "maxLength": 120 },
+        "designation": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "assignedDepartment": { "type": "string", "maxLength": 200 },
+        "qualification": { "type": "string", "maxLength": 160 },
+        "monthlySalary": { "type": "number" },
+        "address": { "type": "string", "maxLength": 350 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "emergencyContact": { "type": "string", "maxLength": 32 },
+        "joinedDate": { "type": "string", "maxLength": 20 },
+        "photoUrl": { "type": "string", "maxLength": 2048 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "staffId", "fullName", "fatherOrSpouseName", "designation", "assignedDepartment",
+        "qualification", "monthlySalary", "address", "phone", "emergencyContact", "joinedDate", "photoUrl",
+        "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "ClassAllocation": {
+      "title": "ClassAllocation",
+      "description": "Tenant-isolated class and section capacity configuration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "sections": { "type": "array" },
+        "sectionCapacity": { "type": "number" },
+        "isDefault": { "type": "boolean" },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "className", "sections", "sectionCapacity", "isDefault", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "AttendanceSheet": {
+      "title": "AttendanceSheet",
+      "description": "Tenant-isolated daily attendance register.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "maxLength": 20 },
+        "className": { "type": "string", "maxLength": 40 },
+        "section": { "type": "string", "maxLength": 16 },
+        "entries": { "type": "object" },
+        "notes": { "type": "object" },
+        "markedBy": { "type": "string", "maxLength": 254 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "schoolId", "date", "className", "section", "entries", "notes", "markedBy", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "ExamSchedule": {
+      "title": "ExamSchedule",
+      "description": "Tenant-isolated examination schedule and timetable.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "examName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "academicSession": { "type": "string", "maxLength": 32 },
+        "className": { "type": "string", "maxLength": 40 },
+        "examCenter": { "type": "string", "maxLength": 180 },
+        "instructions": { "type": "string", "maxLength": 2000 },
+        "subjects": { "type": "array" },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "examCode", "examName", "academicSession", "className", "examCenter", "instructions", "subjects", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "ExamMarksheet": {
+      "title": "ExamMarksheet",
+      "description": "Tenant-isolated student examination marksheet.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "maxLength": 32 },
+        "examName": { "type": "string", "maxLength": 120 },
+        "academicSession": { "type": "string", "maxLength": 32 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "admissionId": { "type": "string", "maxLength": 32 },
+        "rollNumber": { "type": "string", "maxLength": 32 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "className": { "type": "string", "maxLength": 40 },
+        "section": { "type": "string", "maxLength": 16 },
+        "fatherName": { "type": "string", "maxLength": 120 },
+        "motherName": { "type": "string", "maxLength": 120 },
+        "dob": { "type": "string", "maxLength": 20 },
+        "subjectMarks": { "type": "array" },
+        "totalMaxMarks": { "type": "number" },
+        "totalMinMarks": { "type": "number" },
+        "totalObtained": { "type": "number" },
+        "percentage": { "type": "number" },
+        "overallGrade": { "type": "string", "maxLength": 16 },
+        "passed": { "type": "boolean" },
+        "remarks": { "type": "string", "maxLength": 300 },
+        "customRemarks": { "type": "string", "maxLength": 300 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "examId", "examCode", "examName", "academicSession", "studentId", "admissionId",
+        "rollNumber", "studentName", "className", "section", "fatherName", "motherName", "dob",
+        "subjectMarks", "totalMaxMarks", "totalMinMarks", "totalObtained", "percentage", "overallGrade",
+        "passed", "remarks", "customRemarks", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "TermGrade": {
+      "title": "TermGrade",
+      "description": "Tenant-isolated quick term grade record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "admissionId": { "type": "string", "maxLength": 32 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "className": { "type": "string", "maxLength": 40 },
+        "section": { "type": "string", "maxLength": 16 },
+        "fatherName": { "type": "string", "maxLength": 120 },
+        "dob": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "maxLength": 40 },
+        "english": { "type": "number" },
+        "hindi": { "type": "number" },
+        "maths": { "type": "number" },
+        "science": { "type": "number" },
+        "total": { "type": "number" },
+        "percentage": { "type": "number" },
+        "passed": { "type": "boolean" },
+        "recordedAt": { "type": "string", "maxLength": 64 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "schoolId", "studentId", "admissionId", "studentName", "className", "section", "fatherName", "dob",
+        "term", "english", "hindi", "maths", "science", "total", "percentage", "passed", "recordedAt",
+        "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "SchoolNotice": {
+      "title": "SchoolNotice",
+      "description": "Tenant-isolated school notice board announcement.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "category": { "type": "string", "enum": ["Academic", "Examination", "Holiday", "Transport", "Admissions", "General"], "maxLength": 24 },
+        "postedBy": { "type": "string", "maxLength": 254 },
+        "noticeCreatedAt": { "type": "string", "maxLength": 64 },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "title", "body", "category", "postedBy", "noticeCreatedAt", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "CloudMediaFile": {
+      "title": "CloudMediaFile",
+      "description": "Tenant-isolated cloud media document for student, staff, and school photographs.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": { "type": "string", "enum": ["student-photo", "student-aadhaar", "staff-photo", "school-logo"], "maxLength": 32 },
+        "recordRef": { "type": "string", "maxLength": 128 },
+        "mimeType": { "type": "string", "maxLength": 64 },
+        "dataUrl": { "type": "string", "minLength": 20, "maxLength": 450000 },
+        "sizeBytes": { "type": "number" },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "category", "recordRef", "mimeType", "dataUrl", "sizeBytes", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "MasterAccount": {
+      "title": "MasterAccount",
+      "description": "Cross-device Master Account Directory entry linking an authenticated owner or staff email to their bound dynamic cloud database credentials.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "activeSchoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["main_admin", "accountant", "teacher", "director"], "maxLength": 24 },
+        "cloudProvider": { "type": "string", "enum": ["managed", "supabase", "firebase"], "maxLength": 24 },
+        "cloudApiUrl": { "type": "string", "maxLength": 500 },
+        "cloudPublicKey": { "type": "string", "maxLength": 2000 },
+        "firebaseProjectId": { "type": "string", "maxLength": 128 },
+        "firebaseAuthDomain": { "type": "string", "maxLength": 254 },
+        "firebaseDatabaseId": { "type": "string", "maxLength": 128 },
+        "firebaseAppId": { "type": "string", "maxLength": 160 },
+        "firebaseStorageBucket": { "type": "string", "maxLength": 254 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "activeSchoolId", "schoolName", "role", "cloudProvider", "cloudApiUrl", "cloudPublicKey", "firebaseProjectId", "firebaseAuthDomain", "firebaseDatabaseId", "firebaseAppId", "firebaseStorageBucket", "createdAt", "updatedAt"]
+    },
+    "UiCustomizationConfig": {
+      "title": "UiCustomizationConfig",
+      "description": "Tenant-isolated In-App AI Customization Engine preferences for themes, fee receipts, marksheet layouts, and custom form fields.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "schoolId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "accentTheme": { "type": "string", "enum": ["indigo", "emerald", "royal-blue", "crimson", "amber", "slate"], "maxLength": 24 },
+        "densityMode": { "type": "string", "enum": ["comfortable", "compact"], "maxLength": 24 },
+        "feeReceiptShowQr": { "type": "boolean" },
+        "feeReceiptStyle": { "type": "string", "enum": ["classic", "modern-boxed", "compact-slip"], "maxLength": 24 },
+        "feeReceiptFooterNote": { "type": "string", "maxLength": 400 },
+        "feeReceiptShowLogoWatermark": { "type": "boolean" },
+        "marksheetLayout": { "type": "string", "enum": ["standard", "executive-crest", "cbse-detailed"], "maxLength": 24 },
+        "marksheetShowQr": { "type": "boolean" },
+        "marksheetShowRankBadge": { "type": "boolean" },
+        "admitCardShowQr": { "type": "boolean" },
+        "dashboardBannerTitle": { "type": "string", "maxLength": 160 },
+        "customStudentFields": { "type": "array" },
+        "promptHistory": { "type": "array" },
+        "authorizedEmails": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "accentTheme", "densityMode", "feeReceiptShowQr", "feeReceiptStyle", "feeReceiptFooterNote", "feeReceiptShowLogoWatermark", "marksheetLayout", "marksheetShowQr", "marksheetShowRankBadge", "admitCardShowQr", "dashboardBannerTitle", "customStudentFields", "promptHistory", "authorizedEmails", "createdByUid", "updatedByUid", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/master_accounts/{userId}": {
+      "schema": "MasterAccount",
+      "description": "Owner-isolated Master Account Directory binding email logins to personal Supabase or Firebase cloud credentials across devices."
+    },
+    "/user_memberships/{membershipId}": {
+      "schema": "UserMembership",
+      "description": "Per-user school workspace discovery index."
+    },
+    "/schools/{schoolId}": {
+      "schema": "SchoolTenant",
+      "description": "Multi-tenant school root configuration, subscription status, and quota counters."
+    },
+    "/schools/{schoolId}/members/{memberUid}": {
+      "schema": "SchoolMember",
+      "description": "Role-based staff membership registry for a school workspace."
+    },
+    "/schools/{schoolId}/invites/{inviteId}": {
+      "schema": "StaffInvite",
+      "description": "Shareable role-bound staff invitation links for a school workspace."
+    },
+    "/schools/{schoolId}/sessions/{sessionId}": {
+      "schema": "AcademicSession",
+      "description": "Tenant-isolated academic sessions."
+    },
+    "/schools/{schoolId}/fee_schedules/{scheduleId}": {
+      "schema": "FeeSchedule",
+      "description": "Tenant-isolated class-session fee schedules."
+    },
+    "/schools/{schoolId}/students/{studentId}": {
+      "schema": "Student",
+      "description": "Tenant-isolated student admissions and profiles."
+    },
+    "/schools/{schoolId}/fees/{feeId}": {
+      "schema": "FeeReceipt",
+      "description": "Tenant-isolated fee receipts ledger."
+    },
+    "/schools/{schoolId}/routes/{routeId}": {
+      "schema": "TransportRoute",
+      "description": "Tenant-isolated transport bus routes."
+    },
+    "/schools/{schoolId}/staff/{staffId}": {
+      "schema": "StaffProfile",
+      "description": "Tenant-isolated staff HR records."
+    },
+    "/schools/{schoolId}/classes/{classId}": {
+      "schema": "ClassAllocation",
+      "description": "Tenant-isolated class and section allocations."
+    },
+    "/schools/{schoolId}/attendance/{sheetId}": {
+      "schema": "AttendanceSheet",
+      "description": "Tenant-isolated daily attendance registers."
+    },
+    "/schools/{schoolId}/exams/{examId}": {
+      "schema": "ExamSchedule",
+      "description": "Tenant-isolated examination schedules."
+    },
+    "/schools/{schoolId}/marksheets/{marksheetId}": {
+      "schema": "ExamMarksheet",
+      "description": "Tenant-isolated student marksheets."
+    },
+    "/schools/{schoolId}/grades/{gradeId}": {
+      "schema": "TermGrade",
+      "description": "Tenant-isolated quick term grades."
+    },
+    "/schools/{schoolId}/notices/{noticeId}": {
+      "schema": "SchoolNotice",
+      "description": "Tenant-isolated school notices."
+    },
+    "/schools/{schoolId}/media_files/{mediaId}": {
+      "schema": "CloudMediaFile",
+      "description": "Tenant-isolated compressed cloud media objects."
+    },
+    "/schools/{schoolId}/ui_config/{configId}": {
+      "schema": "UiCustomizationConfig",
+      "description": "Tenant-isolated In-App AI Customization Engine layout, theme, receipt, and custom field settings."
+    }
+  }
+}
