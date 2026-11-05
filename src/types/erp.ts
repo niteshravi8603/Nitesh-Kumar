@@ -171,6 +171,8 @@ export interface SchoolMemberRecord {
   addedByUid: string;
   createdAt: string;
   updatedAt: string;
+  staffProfileId?: string;
+  initialPasswordHint?: string;
 }
 
 export interface StaffInviteRecord {

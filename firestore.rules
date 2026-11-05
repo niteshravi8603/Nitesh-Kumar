@@ -29,7 +29,7 @@ service cloud.firestore {
         && request.auth.token.email is string
         && request.auth.token.email.size() >= 3
         && request.auth.token.email.size() <= 254
-        && request.auth.token.email_verified == true;
+        && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'password');
     }
 
     function isValidId(id) {
@@ -828,6 +828,17 @@ service cloud.firestore {
               )
               && get(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.role == incoming().role
               && getAfter(/databases/$(database)/documents/schools/$(schoolId)/invites/$(incoming().inviteId)).data.status == 'accepted'
+              && (
+                incoming().role != 'accountant'
+                || getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount + 1
+              )
+            )
+            ||
+            // Branch C: School Main Admin directly provisioning a staff account
+            (
+              isSchoolMainAdmin(schoolId)
+              && incoming().role in ['accountant', 'teacher', 'director']
+              && incoming().addedByUid == request.auth.uid
               && (
                 incoming().role != 'accountant'
                 || getAfter(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount == get(/databases/$(database)/documents/schools/$(schoolId)).data.accountantCount + 1

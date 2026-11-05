@@ -84,8 +84,8 @@ export const PRIMARY_SIDEBAR_ITEMS: PrimarySidebarMenuItem[] = [
   {
     serial: '05',
     id: 'team-access',
-    title: 'Team & Staff Invites',
-    subtitle: 'RBAC Roles, Max-2 Accountants & Links',
+    title: 'Staff & User Management',
+    subtitle: 'Login Credentials, Roles & RBAC',
     icon: Users,
     activeClass: 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-950/50',
     hoverClass: 'hover:bg-gradient-to-r hover:from-indigo-500/90 hover:to-violet-600/90 hover:text-white',

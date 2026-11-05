@@ -53,6 +53,7 @@ import {
   SchoolMemberRecord,
   SchoolProfileSettings,
   SchoolRole,
+  ROLE_META,
   SchoolTenantMeta,
   StaffAccount,
   StaffDesignation,
@@ -69,6 +70,9 @@ import {
   TransportRoute,
   UserSchoolMembership,
 } from '../types/erp';
+import { deleteApp, initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
 import {
   createUserWithEmailAndPassword,
   FIREBASE_PROJECT_ID,
@@ -81,6 +85,7 @@ import {
   normalizeAuthorizedEmailsList,
   OperationType,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   toSafeDocId,
   updateProfile,
@@ -882,6 +887,19 @@ interface SchoolContextValue {
 
   // Staff Invite & RBAC Management Actions (Main Admin)
   buildInviteRegistrationUrl: (schoolId: string, inviteId: string) => string;
+  createStaffAccountWithCredentials: (input: {
+    fullName: string;
+    email: string;
+    password: string;
+    role: InvitableSchoolRole;
+    staffProfileId?: string;
+  }) => Promise<{
+    ok: boolean;
+    error?: string;
+    staffUid?: string;
+    generatedPassword?: string;
+  }>;
+  sendStaffPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
   createStaffInvite: (input: {
     invitedName: string;
     invitedEmail: string;
@@ -3401,6 +3419,210 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return base;
     },
     []
+  );
+
+  const sendStaffPasswordReset = useCallback(
+    async (email: string): Promise<{ ok: boolean; error?: string }> => {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail) {
+        return { ok: false, error: 'Email address is required.' };
+      }
+      try {
+        await sendPasswordResetEmail(firebaseAuth, cleanEmail);
+        notify(
+          'success',
+          'Password Reset Email Dispatched',
+          `A secure password reset link has been dispatched to ${cleanEmail}.`
+        );
+        return { ok: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not send password reset email.';
+        notify('error', 'Reset Failed', msg);
+        return { ok: false, error: msg };
+      }
+    },
+    [notify]
+  );
+
+  const createStaffAccountWithCredentials = useCallback(
+    async (input: {
+      fullName: string;
+      email: string;
+      password: string;
+      role: InvitableSchoolRole;
+      staffProfileId?: string;
+    }): Promise<{
+      ok: boolean;
+      error?: string;
+      staffUid?: string;
+      generatedPassword?: string;
+    }> => {
+      const currentAdmin = firebaseAuth.currentUser;
+      const schoolId = activeSchoolIdRef.current;
+      const meta = tenantMetaRef.current;
+
+      if (!isCurrentUserAdmin || !currentAdmin?.email || !schoolId || !meta) {
+        return {
+          ok: false,
+          error: 'Only the School Main Admin can provision staff accounts.',
+        };
+      }
+
+      const cleanName = input.fullName.trim();
+      const cleanEmail = input.email.trim().toLowerCase();
+      const cleanPassword = input.password.trim();
+
+      if (!cleanName || cleanName.length < 2) {
+        return { ok: false, error: 'Please enter the staff member’s full name.' };
+      }
+      if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        return {
+          ok: false,
+          error: 'Please enter a valid email address (e.g., teacher@school.edu or name@gmail.com).',
+        };
+      }
+      if (!cleanPassword || cleanPassword.length < 6) {
+        return { ok: false, error: 'Staff password must be at least 6 characters long.' };
+      }
+
+      if (input.role === 'accountant') {
+        const activeAccountants = schoolMembersRef.current.filter((m) => m.role === 'accountant').length;
+        if (activeAccountants >= ACCOUNTANT_MAX_LIMIT) {
+          return {
+            ok: false,
+            error: `Accountant limit reached (${ACCOUNTANT_MAX_LIMIT} maximum per school).`,
+          };
+        }
+      }
+
+      const alreadyMember = schoolMembersRef.current.find(
+        (m) => m.email.toLowerCase() === cleanEmail
+      );
+      if (alreadyMember) {
+        return {
+          ok: false,
+          error: `User ${cleanEmail} is already a verified member of this school (${ROLE_META[alreadyMember.role].label}).`,
+        };
+      }
+
+      setCloudSyncStatus('syncing');
+
+      // 1. Create the invite record and sync authorized emails in Cloud Firestore
+      let inviteRes: StaffInviteRecord;
+      try {
+        inviteRes = await createStaffInviteInCloud({
+          schoolId,
+          invitedName: cleanName,
+          invitedEmail: cleanEmail,
+          role: input.role,
+          currentUid: currentAdmin.uid,
+          currentUserEmail: currentAdmin.email,
+          ownerEmail: meta.ownerEmail,
+          schoolName: meta.schoolName || dbRef.current.schoolProfile?.schoolName || 'School ERP',
+          currentAuthorizedEmails: authorizedEmailsRef.current,
+          existingMembers: schoolMembersRef.current,
+          existingInvites: staffInvitesRef.current,
+          dbSnapshot: dbRef.current,
+          storedLogoUrl: rawSchoolLogoUrlRef.current || undefined,
+        });
+      } catch (err) {
+        setCloudSyncStatus('live');
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Could not initialize staff account in cloud.',
+        };
+      }
+
+      // 2. Create the user in Firebase Auth using a secondary Firebase app instance
+      let createdStaffUid = '';
+      const tempAppName = `prov_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      let tempApp: ReturnType<typeof initializeApp> | null = null;
+
+      try {
+        tempApp = initializeApp(firebaseConfig, tempAppName);
+        const tempAuth = getAuth(tempApp);
+        const cred = await createUserWithEmailAndPassword(tempAuth, cleanEmail, cleanPassword);
+        createdStaffUid = cred.user.uid;
+        if (cleanName) {
+          await updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
+        }
+      } catch (authErr: unknown) {
+        const msg = authErr instanceof Error ? authErr.message : String(authErr);
+        if (msg.includes('auth/email-already-in-use')) {
+          notify(
+            'info',
+            'Firebase Auth Account Exists',
+            `An account for ${cleanEmail} already exists in Firebase Auth. School access invite generated and pre-authorized.`
+          );
+        } else {
+          console.warn('Direct secondary auth account creation notice:', msg);
+        }
+      } finally {
+        if (tempApp) {
+          await deleteApp(tempApp).catch(() => {});
+        }
+      }
+
+      // 3. Claim the invite and register member in Cloud Firestore
+      if (createdStaffUid) {
+        try {
+          const membership = await acceptStaffInviteInCloud(schoolId, inviteRes, {
+            uid: createdStaffUid,
+            email: cleanEmail,
+            displayName: cleanName,
+          });
+
+          const newMember: SchoolMemberRecord = {
+            uid: createdStaffUid,
+            schoolId,
+            ownerUid: meta.ownerUid,
+            email: cleanEmail,
+            displayName: cleanName,
+            role: input.role,
+            inviteId: inviteRes.id,
+            addedByUid: currentAdmin.uid,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            staffProfileId: input.staffProfileId,
+            initialPasswordHint: `${cleanPassword.slice(0, 2)}••••${cleanPassword.slice(-1)}`,
+          };
+
+          const nextMembers = [
+            ...schoolMembersRef.current.filter((m) => m.uid !== createdStaffUid),
+            newMember,
+          ];
+          setSchoolMembers(nextMembers);
+          schoolMembersRef.current = nextMembers;
+          setUserMemberships((prev) => [
+            ...prev.filter((m) => m.uid !== createdStaffUid),
+            membership,
+          ]);
+          setStaffInvites((prev) =>
+            prev.map((i) =>
+              i.id === inviteRes.id
+                ? { ...i, status: 'accepted' as const, acceptedByUid: createdStaffUid }
+                : i
+            )
+          );
+        } catch (claimErr) {
+          console.warn('Direct member claim notice:', claimErr);
+        }
+      }
+
+      setCloudSyncStatus('live');
+      notify(
+        'success',
+        'Staff Account Provisioned',
+        `Login credentials created for ${cleanName} (${ROLE_META[input.role].label}).`
+      );
+
+      return {
+        ok: true,
+        staffUid: createdStaffUid || undefined,
+        generatedPassword: cleanPassword,
+      };
+    },
+    [isCurrentUserAdmin, notify]
   );
 
   const createStaffInvite = useCallback(
@@ -7215,6 +7437,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       retryCloudConnection,
       signOutStaff,
       buildInviteRegistrationUrl,
+      createStaffAccountWithCredentials,
+      sendStaffPasswordReset,
       createStaffInvite,
       changeSchoolMemberRole,
       removeSchoolMember,
@@ -7354,6 +7578,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       retryCloudConnection,
       signOutStaff,
       buildInviteRegistrationUrl,
+      createStaffAccountWithCredentials,
+      sendStaffPasswordReset,
       createStaffInvite,
       changeSchoolMemberRole,
       removeSchoolMember,

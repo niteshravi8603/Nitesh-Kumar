@@ -30,12 +30,11 @@ import { SettingsModule } from './components/modules/SettingsModule';
 import { BulkDataImportModule } from './components/modules/BulkDataImportModule';
 import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { AiCustomizationDrawer } from './components/AiCustomizationDrawer';
-import { CloudBindingConfigFields } from './components/CloudBindingConfigFields';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { ModalShell } from './components/ui/ModalShell';
 import { ToastViewport } from './components/ui/ToastViewport';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
-import { DynamicCloudBinding, ROLE_META, SubscriptionPlan } from './types/erp';
+import { ROLE_META, SubscriptionPlan } from './types/erp';
 
 const RegisterAdditionalSchoolModal: React.FC = () => {
   const {
@@ -49,11 +48,6 @@ const RegisterAdditionalSchoolModal: React.FC = () => {
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [plan, setPlan] = useState<SubscriptionPlan>('Enterprise');
-  const [cloudBinding, setCloudBinding] = useState<DynamicCloudBinding>({
-    provider: 'managed',
-    apiUrl: '',
-    publicKey: '',
-  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -64,13 +58,6 @@ const RegisterAdditionalSchoolModal: React.FC = () => {
       setErr('Please enter the official School Name.');
       return;
     }
-    if (
-      cloudBinding.provider !== 'managed' &&
-      (!cloudBinding.apiUrl.trim() || !cloudBinding.publicKey.trim())
-    ) {
-      setErr('Please enter both your Cloud API URL and Public Key, or select Managed Cloud.');
-      return;
-    }
     setBusy(true);
     try {
       const res = await registerSchoolWorkspace({
@@ -79,7 +66,11 @@ const RegisterAdditionalSchoolModal: React.FC = () => {
         address: address.trim(),
         phone: phone.trim(),
         subscriptionPlan: plan,
-        cloudBinding,
+        cloudBinding: {
+          provider: 'managed',
+          apiUrl: '',
+          publicKey: '',
+        },
       });
       if (!res.ok) {
         setErr(res.error || 'Could not create school workspace.');
@@ -178,12 +169,14 @@ const RegisterAdditionalSchoolModal: React.FC = () => {
           </select>
         </div>
 
-        <CloudBindingConfigFields
-          value={cloudBinding}
-          onChange={setCloudBinding}
-          compact
-          disabled={busy}
-        />
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-slate-700">
+          <p className="font-semibold text-emerald-800">
+            Central Managed Cloud Storage
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-600">
+            This workspace will automatically synchronize to Central Cloud Firestore with multi-tenant row-level isolation.
+          </p>
+        </div>
 
         <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-4">
           <button
@@ -237,7 +230,7 @@ const ERPWorkspace: React.FC = () => {
   const schoolTitle = db.schoolProfile?.schoolName?.trim() || GLOBAL_APP_TITLE;
   const footerLinks = [
     canAccessModule('team-access')
-      ? { id: 'team-access' as const, label: 'Team & Invites' }
+      ? { id: 'team-access' as const, label: 'Staff & User Management' }
       : null,
     canAccessModule('settings')
       ? { id: 'settings' as const, label: 'School Settings' }

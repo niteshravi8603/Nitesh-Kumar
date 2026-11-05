@@ -4,6 +4,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   updateProfile,
 } from 'firebase/auth';
@@ -58,6 +59,7 @@ googleAuthProvider.setCustomParameters({
 export {
   createUserWithEmailAndPassword,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   updateProfile,
 };

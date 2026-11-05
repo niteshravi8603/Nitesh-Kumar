@@ -23,13 +23,11 @@ import {
 } from 'lucide-react';
 import { DEFAULT_SCHOOL_PROFILE, useSchool } from '../../context/SchoolContext';
 import {
-  DynamicCloudBinding,
   ROLE_META,
   SchoolProfileSettings,
   SubscriptionPlan,
   SubscriptionStatus,
 } from '../../types/erp';
-import { CloudBindingConfigFields } from '../CloudBindingConfigFields';
 import { downloadFullBackupJson } from '../../utils/backupExport';
 import { formatTimestampDisplay } from '../../utils/formatters';
 
@@ -70,12 +68,6 @@ export const SettingsModule: React.FC<SettingsModuleProps> = ({ sectionMode = 'a
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Dynamic User-Owned Cloud Binding State
-  const [draftCloudBinding, setDraftCloudBinding] = useState<DynamicCloudBinding>(() => ({
-    ...cloudBinding,
-  }));
-  const [savingBinding, setSavingBinding] = useState(false);
-
   // Backup & Reset State
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [signOutAfterReset, setSignOutAfterReset] = useState(false);
@@ -87,21 +79,6 @@ export const SettingsModule: React.FC<SettingsModuleProps> = ({ sectionMode = 'a
       ...db.schoolProfile,
     });
   }, [db.schoolProfile]);
-
-  useEffect(() => {
-    setDraftCloudBinding({ ...cloudBinding });
-  }, [cloudBinding]);
-
-  const handleSaveCloudBinding = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isCurrentUserAdmin) return;
-    setSavingBinding(true);
-    try {
-      await updateCloudBinding(draftCloudBinding);
-    } finally {
-      setSavingBinding(false);
-    }
-  };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -873,45 +850,45 @@ export const SettingsModule: React.FC<SettingsModuleProps> = ({ sectionMode = 'a
             </div>
           )}
 
-          {isCurrentUserAdmin && (
-            <form
-              onSubmit={handleSaveCloudBinding}
-              className="rounded-xl border border-slate-200 bg-white p-6 space-y-4"
-            >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          {/* Central Managed Cloud Storage Status */}
+          <div className="rounded-xl border border-emerald-200 bg-white p-6 shadow-xs">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3.5">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
+                  <Database className="h-5 w-5" />
+                </div>
                 <div>
-                  <h3 className="text-base font-bold tracking-tight text-slate-900">
-                    Self-Hosted Cloud Database Binding (Supabase / Firebase)
-                  </h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Link your personal Supabase or Firebase project. Credentials are tied to your Gmail Master Account so logging in on any computer automatically connects to your cloud, and generated Staff Invite Links carry the public connection context automatically.
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold tracking-tight text-slate-900">
+                      Central Managed Cloud Storage
+                    </h3>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Active · Hardcoded Central Backend
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    All school databases, student records, fee collections, staff credentials, and digital signatures automatically synchronize to the managed cloud backend in real time out of the box with multi-tenant row-level security.
                   </p>
                 </div>
-                <button
-                  type="submit"
-                  disabled={savingBinding}
-                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 whitespace-nowrap shrink-0"
-                >
-                  {savingBinding ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="h-4 w-4" />
-                  )}
-                  <span>
-                    {savingBinding
-                      ? 'Binding & Syncing Cloud...'
-                      : 'Save & Sync to Bound Cloud'}
-                  </span>
-                </button>
               </div>
+            </div>
 
-              <CloudBindingConfigFields
-                value={draftCloudBinding}
-                onChange={setDraftCloudBinding}
-                disabled={savingBinding}
-              />
-            </form>
-          )}
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3 pt-3 border-t border-slate-100 text-xs">
+              <div className="rounded-lg bg-slate-50 p-2.5">
+                <span className="text-[11px] font-semibold text-slate-500 uppercase">Cloud Provider</span>
+                <p className="mt-0.5 font-bold text-slate-800">Managed Cloud Firestore</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2.5">
+                <span className="text-[11px] font-semibold text-slate-500 uppercase">Workspace Tenant ID</span>
+                <p className="mt-0.5 font-mono font-bold text-slate-800 truncate">{tenantMeta?.id || 'Active Cloud Workspace'}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2.5">
+                <span className="text-[11px] font-semibold text-slate-500 uppercase">Multi-Tenant Isolation</span>
+                <p className="mt-0.5 font-bold text-emerald-700">Strict RLS &amp; RBAC Active</p>
+              </div>
+            </div>
+          </div>
 
           {/* Role-Based Team Access Summary Card */}
           <div className="rounded-xl border border-slate-200 bg-white p-6">
